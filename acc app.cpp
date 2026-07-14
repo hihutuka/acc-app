@@ -8,7 +8,9 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iomanip>
 #include <iostream>
 #include <mutex>
@@ -147,6 +149,125 @@ namespace
         const auto last = value.find_last_not_of(" \t\r\n");
         return value.substr(first, last - first + 1);
     }
+
+    std::string ToLowerAscii(std::string_view value)
+    {
+        std::string result;
+        result.reserve(value.size());
+        for (const char ch : value)
+        {
+            if (ch >= 'A' && ch <= 'Z')
+            {
+                result.push_back(static_cast<char>(ch - 'A' + 'a'));
+            }
+            else
+            {
+                result.push_back(ch);
+            }
+        }
+
+        return result;
+    }
+
+    std::string FindHttpHeader(std::string_view request, std::string_view headerName)
+    {
+        const std::string wanted = ToLowerAscii(headerName);
+        std::size_t lineStart = 0;
+
+        while (lineStart < request.size())
+        {
+            const std::size_t lineEnd = request.find("\r\n", lineStart);
+            if (lineEnd == std::string_view::npos || lineEnd == lineStart)
+            {
+                break;
+            }
+
+            const std::string_view line = request.substr(lineStart, lineEnd - lineStart);
+            const std::size_t colon = line.find(':');
+            if (colon != std::string_view::npos)
+            {
+                const std::string name = ToLowerAscii(line.substr(0, colon));
+                if (name == wanted)
+                {
+                    return Trim(std::string(line.substr(colon + 1)));
+                }
+            }
+
+            lineStart = lineEnd + 2;
+        }
+
+        return {};
+    }
+
+    float CleanFloat(float value)
+    {
+        return std::isfinite(value) ? value : 0.0f;
+    }
+
+    std::string JsonEscape(std::string_view value)
+    {
+        std::ostringstream oss;
+        for (const unsigned char ch : value)
+        {
+            switch (ch)
+            {
+            case '"':
+                oss << "\\\"";
+                break;
+            case '\\':
+                oss << "\\\\";
+                break;
+            case '\b':
+                oss << "\\b";
+                break;
+            case '\f':
+                oss << "\\f";
+                break;
+            case '\n':
+                oss << "\\n";
+                break;
+            case '\r':
+                oss << "\\r";
+                break;
+            case '\t':
+                oss << "\\t";
+                break;
+            default:
+                if (ch < 0x20)
+                {
+                    oss << "\\u"
+                        << std::hex << std::uppercase << std::setw(4) << std::setfill('0')
+                        << static_cast<int>(ch)
+                        << std::dec << std::nouppercase << std::setfill(' ');
+                }
+                else
+                {
+                    oss << static_cast<char>(ch);
+                }
+                break;
+            }
+        }
+
+        return oss.str();
+    }
+
+    template <std::size_t Size>
+    std::string NarrowWideText(const wchar_t (&value)[Size])
+    {
+        std::string result;
+        result.reserve(Size);
+        for (wchar_t ch : value)
+        {
+            if (ch == L'\0')
+            {
+                break;
+            }
+
+            result.push_back(ch >= 0 && ch <= 0x7F ? static_cast<char>(ch) : '?');
+        }
+
+        return result;
+    }
 }
 
 struct TelemetrySnapshot
@@ -198,22 +319,22 @@ struct TelemetrySnapshot
         oss << "{";
 
         oss << "\"packetId\":" << packetId << ",";
-        oss << "\"throttle\":" << throttle << ",";
-        oss << "\"brake\":" << brake << ",";
-        oss << "\"fuel\":" << fuel << ",";
-        oss << "\"fuelPerLap\":" << fuelPerLap << ",";
+        oss << "\"throttle\":" << CleanFloat(throttle) << ",";
+        oss << "\"brake\":" << CleanFloat(brake) << ",";
+        oss << "\"fuel\":" << CleanFloat(fuel) << ",";
+        oss << "\"fuelPerLap\":" << CleanFloat(fuelPerLap) << ",";
 
         oss << "\"gear\":" << gear << ",";
         oss << "\"rpm\":" << rpm << ",";
-        oss << "\"steerAngle\":" << steerAngle << ",";
-        oss << "\"speedKmh\":" << speedKmh << ",";
+        oss << "\"steerAngle\":" << CleanFloat(steerAngle) << ",";
+        oss << "\"speedKmh\":" << CleanFloat(speedKmh) << ",";
 
         oss << "\"lap\":" << currentLap << ",";
         oss << "\"position\":" << position << ",";
 
-        oss << "\"currentLapTime\":\"" << currentLapTime << "\",";
-        oss << "\"lastLapTime\":\"" << lastLapTime << "\",";
-        oss << "\"bestLapTime\":\"" << bestLapTime << "\",";
+        oss << "\"currentLapTime\":\"" << JsonEscape(currentLapTime) << "\",";
+        oss << "\"lastLapTime\":\"" << JsonEscape(lastLapTime) << "\",";
+        oss << "\"bestLapTime\":\"" << JsonEscape(bestLapTime) << "\",";
 
         oss << "\"isInPit\":" << (isInPit ? "true" : "false") << ",";
         oss << "\"isInPitLane\":" << (isInPitLane ? "true" : "false") << ",";
@@ -221,10 +342,10 @@ struct TelemetrySnapshot
         oss << "\"flag\":" << flag << ",";
         oss << "\"rainIntensity\":" << rainIntensity << ",";
         oss << "\"trackGripStatus\":" << trackGripStatus << ",";
-        oss << "\"idealLineGrip\":" << idealLineGrip << ",";
+        oss << "\"idealLineGrip\":" << CleanFloat(idealLineGrip) << ",";
 
-        oss << "\"trackLength\":" << trackLength << ",";
-        oss << "\"maxFuel\":" << maxFuel << ",";
+        oss << "\"trackLength\":" << CleanFloat(trackLength) << ",";
+        oss << "\"maxFuel\":" << CleanFloat(maxFuel) << ",";
 
         oss << "\"connected\":" << (connected ? "true" : "false");
 
@@ -254,7 +375,7 @@ struct TelemetryFrame
         oss << "\"strategy\":{";
         oss << "\"pitRecommended\":" << (strategy.pitRecommended ? "true" : "false") << ",";
         oss << "\"estimatedLapsRemaining\":" << strategy.estimatedLapsRemaining << ",";
-        oss << "\"summary\":\"" << strategy.summary << "\"";
+        oss << "\"summary\":\"" << JsonEscape(strategy.summary) << "\"";
         oss << "}";
         oss << "}";
         return oss.str();
@@ -271,101 +392,171 @@ public:
 
     ~SharedMemoryReader()
     {
-        if (physicsView_ != nullptr)
-        {
-            UnmapViewOfFile(physicsView_);
-            physicsView_ = nullptr;
-        }
-
-        if (physicsMapping_ != nullptr)
-        {
-            CloseHandle(physicsMapping_);
-            physicsMapping_ = nullptr;
-        }
+        CloseView(physicsMapping_, physicsView_);
+        CloseView(graphicsMapping_, graphicsView_);
+        CloseView(staticMapping_, staticView_);
     }
 
     bool Connect()
     {
-        if (connected_)
-        {
-            return true;
-        }
+        OpenView(kPhysicsMappingName, physicsMapping_, physicsView_);
+        OpenView(kGraphicsMappingName, graphicsMapping_, graphicsView_);
+        OpenView(kStaticMappingName, staticMapping_, staticView_);
 
-        physicsMapping_ = OpenFileMappingW(FILE_MAP_READ, FALSE, kPhysicsMappingName);
-        if (physicsMapping_ == nullptr)
-        {
-            return false;
-        }
-
-        physicsView_ = static_cast<PhysicsView*>(MapViewOfFile(physicsMapping_, FILE_MAP_READ, 0, 0, sizeof(PhysicsView)));
-        if (physicsView_ == nullptr)
-        {
-            CloseHandle(physicsMapping_);
-            physicsMapping_ = nullptr;
-            return false;
-        }
-
-        connected_ = true;
-        return true;
+        connected_ = physicsView_ != nullptr || graphicsView_ != nullptr || staticView_ != nullptr;
+        return connected_;
     }
 
     TelemetrySnapshot ReadSnapshot()
     {
-        if (!connected_ && !Connect())
-        {
-            return CreateFallbackSnapshot();
-        }
+        Connect();
 
-        if (physicsView_ == nullptr)
+        if (!connected_)
         {
             return CreateFallbackSnapshot();
         }
 
         TelemetrySnapshot snapshot;
-        snapshot.packetId = physicsView_->packetId;
-        snapshot.throttle = physicsView_->gas;
-        snapshot.brake = physicsView_->brake;
-        snapshot.fuel = physicsView_->fuel;
-        snapshot.gear = physicsView_->gear;
-        snapshot.rpm = physicsView_->rpm;
-        snapshot.steerAngle = physicsView_->steerAngle;
-        snapshot.speedKmh = physicsView_->speedKmh;
-        snapshot.connected = true;
+
+        if (physicsView_ != nullptr)
+        {
+            snapshot.packetId = physicsView_->packetId;
+            snapshot.throttle = CleanFloat(physicsView_->gas);
+            snapshot.brake = CleanFloat(physicsView_->brake);
+            snapshot.fuel = CleanFloat(physicsView_->fuel);
+            snapshot.gear = physicsView_->gear;
+            snapshot.rpm = physicsView_->rpms;
+            snapshot.steerAngle = CleanFloat(physicsView_->steerAngle);
+            snapshot.speedKmh = CleanFloat(physicsView_->speedKmh);
+        }
+
+        if (graphicsView_ != nullptr)
+        {
+            snapshot.packetId = graphicsView_->packetId;
+            snapshot.currentLap = graphicsView_->completedLaps;
+            snapshot.position = graphicsView_->position;
+            snapshot.currentLapTime = NarrowWideText(graphicsView_->currentTime);
+            snapshot.lastLapTime = NarrowWideText(graphicsView_->lastTime);
+            snapshot.bestLapTime = NarrowWideText(graphicsView_->bestTime);
+            snapshot.isInPit = graphicsView_->isInPit != 0;
+            snapshot.isInPitLane = graphicsView_->isInPitLane != 0;
+            snapshot.flag = graphicsView_->flag;
+            snapshot.rainIntensity = graphicsView_->rainIntensity;
+            snapshot.trackGripStatus = graphicsView_->trackGripStatus;
+            snapshot.idealLineGrip = CleanFloat(graphicsView_->surfaceGrip);
+
+            snapshot.fuelPerLap = CleanFloat(graphicsView_->fuelXLap);
+            if (snapshot.fuelPerLap <= 0.01f && graphicsView_->fuelEstimatedLaps > 0.01f && snapshot.fuel > 0.01f)
+            {
+                snapshot.fuelPerLap = snapshot.fuel / graphicsView_->fuelEstimatedLaps;
+            }
+            else if (snapshot.fuelPerLap <= 0.01f && graphicsView_->completedLaps > 0 && graphicsView_->usedFuel > 0.01f)
+            {
+                snapshot.fuelPerLap = graphicsView_->usedFuel / static_cast<float>(graphicsView_->completedLaps);
+            }
+        }
+
+        if (staticView_ != nullptr)
+        {
+            snapshot.trackLength = CleanFloat(staticView_->trackSplineLength);
+            snapshot.maxFuel = CleanFloat(staticView_->maxFuel);
+        }
+
+        snapshot.connected = physicsView_ != nullptr || graphicsView_ != nullptr;
         return snapshot;
     }
 
 private:
-    struct PhysicsView
+    struct SPageFilePhysics
     {
         int packetId;
         float gas;
         float brake;
         float fuel;
         int gear;
-        int rpm;
+        int rpms;
         float steerAngle;
         float speedKmh;
+        float velocity[3];
+        float accG[3];
+        float wheelSlip[4];
+        float wheelLoad[4];
+        float wheelsPressure[4];
+        float wheelAngularSpeed[4];
+        float tyreWear[4];
+        float tyreDirtyLevel[4];
+        float tyreCoreTemperature[4];
+        float camberRAD[4];
+        float suspensionTravel[4];
+        float drs;
+        float tc;
+        float heading;
+        float pitch;
+        float roll;
+        float cgHeight;
+        float carDamage[5];
+        int numberOfTyresOut;
+        int pitLimiterOn;
+        float abs;
+        float kersCharge;
+        float kersInput;
+        int autoShifterOn;
+        float rideHeight[2];
+        float turboBoost;
+        float ballast;
+        float airDensity;
+        float airTemp;
+        float roadTemp;
+        float localAngularVel[3];
+        float finalFF;
+        float performanceMeter;
+        int engineBrake;
+        int ersRecoveryLevel;
+        int ersPowerLevel;
+        int ersHeatCharging;
+        int ersIsCharging;
+        float kersCurrentKJ;
+        int drsAvailable;
+        int drsEnabled;
+        float brakeTemp[4];
+        float clutch;
+        float tyreTempI[4];
+        float tyreTempM[4];
+        float tyreTempO[4];
+        int isAIControlled;
+        float tyreContactPoint[4][3];
+        float tyreContactNormal[4][3];
+        float tyreContactHeading[4][3];
+        float brakeBias;
+        float localVelocity[3];
+        int P2PActivations;
+        int P2PStatus;
+        float currentMaxRpm;
+        float mz[4];
+        float fx[4];
+        float fy[4];
+        float slipRatio[4];
+        float slipAngle[4];
+        int tcinAction;
+        int absInAction;
+        float suspensionDamage[4];
+        float tyreTemp[4];
+        float waterTemp;
+        float brakePressure[4];
+        int frontBrakeCompound;
+        int rearBrakeCompound;
+        float padLife[4];
+        float discLife[4];
+        int ignitionOn;
+        int starterEngineOn;
+        int isEngineRunning;
+        float kerbVibration;
+        float slipVibrations;
+        float gVibrations;
+        float absVibrations;
     };
 
-    struct ACCPhysics
-    {
-        int packetId;
-
-        float gas;
-        float brake;
-        float fuel;
-
-        int gear;
-        int rpm;
-
-        float steerAngle;
-
-        float speedKmh;
-
-        float fuelXLap;
-    };
-
-    struct GraphicsView
+    struct SPageFileGraphic
     {
         int packetId;
 
@@ -373,28 +564,267 @@ private:
 
         int session;
 
-        char currentTime[32];
+        wchar_t currentTime[15];
 
-        char lastTime[32];
+        wchar_t lastTime[15];
 
-        char bestTime[32];
+        wchar_t bestTime[15];
+
+        wchar_t split[15];
 
         int completedLaps;
 
         int position;
 
+        int iCurrentTime;
+
+        int iLastTime;
+
+        int iBestTime;
+
+        float sessionTimeLeft;
+
+        float distanceTraveled;
+
         int isInPit;
+
+        int currentSectorIndex;
+
+        int lastSectorTime;
+
+        int numberOfLaps;
+
+        wchar_t tyreCompound[33];
+
+        float replayTimeMultiplier;
+
+        float normalizedCarPosition;
+
+        int activeCars;
+
+        float carCoordinates[60][3];
+
+        int carID[60];
+
+        int playerCarID;
+
+        float penaltyTime;
+
+        int flag;
+
+        int penalty;
+
+        int idealLineOn;
 
         int isInPitLane;
 
-        int flag;
+        float surfaceGrip;
+
+        int mandatoryPitDone;
+
+        float windSpeed;
+
+        float windDirection;
+
+        int isSetupMenuVisible;
+
+        int mainDisplayIndex;
+
+        int secondaryDisplayIndex;
+
+        int TC;
+
+        int TCCut;
+
+        int EngineMap;
+
+        int ABS;
+
+        float fuelXLap;
+
+        int rainLights;
+
+        int flashingLights;
+
+        int lightsStage;
+
+        float exhaustTemperature;
+
+        int wiperLV;
+
+        int driverStintTotalTimeLeft;
+
+        int driverStintTimeLeft;
+
+        int rainTyres;
+
+        int sessionIndex;
+
+        float usedFuel;
+
+        wchar_t deltaLapTime[15];
+
+        int iDeltaLapTime;
+
+        wchar_t estimatedLapTime[15];
+
+        int iEstimatedLapTime;
+
+        int isDeltaPositive;
+
+        int iSplit;
+
+        int isValidLap;
+
+        float fuelEstimatedLaps;
+
+        wchar_t trackStatus[33];
+
+        int missingMandatoryPits;
+
+        float clock;
+
+        int directionLightsLeft;
+
+        int directionLightsRight;
+
+        int globalYellow;
+
+        int globalYellow1;
+
+        int globalYellow2;
+
+        int globalYellow3;
+
+        int globalWhite;
+
+        int globalGreen;
+
+        int globalChequered;
+
+        int globalRed;
+
+        int mfdTyreSet;
+
+        float mfdFuelToAdd;
+
+        float mfdTyrePressureLF;
+
+        float mfdTyrePressureRF;
+
+        float mfdTyrePressureLR;
+
+        float mfdTyrePressureRR;
+
+        int trackGripStatus;
+
+        int rainIntensity;
+
+        int rainIntensityIn10min;
+
+        int rainIntensityIn30min;
+
+        int currentTyreSet;
+
+        int strategyTyreSet;
+
+        int gapAhead;
+
+        int gapBehind;
     };
 
-    struct StaticView
+    struct SPageFileStatic
     {
-        float trackLength;
+        wchar_t smVersion[15];
+        wchar_t acVersion[15];
+        int numberOfSessions;
+        int numCars;
+        wchar_t carModel[33];
+        wchar_t track[33];
+        wchar_t playerName[33];
+        wchar_t playerSurname[33];
+        wchar_t playerNick[33];
+        int sectorCount;
+        float maxTorque;
+        float maxPower;
+        int maxRpm;
         float maxFuel;
+        float suspensionMaxTravel[4];
+        float tyreRadius[4];
+        float maxTurboBoost;
+        float deprecated1;
+        float deprecated2;
+        int penaltiesEnabled;
+        float aidFuelRate;
+        float aidTireRate;
+        float aidMechanicalDamage;
+        int aidAllowTyreBlankets;
+        float aidStability;
+        int aidAutoClutch;
+        int aidAutoBlip;
+        int hasDRS;
+        int hasERS;
+        int hasKERS;
+        float kersMaxJ;
+        int engineBrakeSettingsCount;
+        int ersPowerControllerCount;
+        float trackSplineLength;
+        wchar_t trackConfiguration[33];
+        float ersMaxJ;
+        int isTimedRace;
+        int hasExtraLap;
+        wchar_t carSkin[33];
+        int reversedGridPositions;
+        int pitWindowStart;
+        int pitWindowEnd;
+        int isOnline;
+        wchar_t dryTyresName[33];
+        wchar_t wetTyresName[33];
     };
+
+    static_assert(offsetof(SPageFilePhysics, speedKmh) == 28, "Unexpected SPageFilePhysics layout.");
+    static_assert(offsetof(SPageFileGraphic, completedLaps) == 132, "Unexpected SPageFileGraphic layout.");
+
+    template <typename View>
+    static bool OpenView(const wchar_t* mappingName, HANDLE& mapping, View*& view)
+    {
+        if (view != nullptr)
+        {
+            return true;
+        }
+
+        mapping = OpenFileMappingW(FILE_MAP_READ, FALSE, mappingName);
+        if (mapping == nullptr)
+        {
+            return false;
+        }
+
+        view = static_cast<View*>(MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0));
+        if (view == nullptr)
+        {
+            CloseHandle(mapping);
+            mapping = nullptr;
+            return false;
+        }
+
+        return true;
+    }
+
+    template <typename View>
+    static void CloseView(HANDLE& mapping, View*& view)
+    {
+        if (view != nullptr)
+        {
+            UnmapViewOfFile(view);
+            view = nullptr;
+        }
+
+        if (mapping != nullptr)
+        {
+            CloseHandle(mapping);
+            mapping = nullptr;
+        }
+    }
 
     TelemetrySnapshot CreateFallbackSnapshot() const
     {
@@ -410,14 +840,19 @@ private:
         snapshot.rpm = 3500 + static_cast<int>(std::sin(elapsed * 2.0f) * 1200.0f);
         snapshot.steerAngle = std::sin(elapsed * 1.8f) * 0.3f;
         snapshot.speedKmh = 80.0f + std::sin(elapsed * 0.9f) * 25.0f;
+        snapshot.fuelPerLap = 2.7f;
+        snapshot.maxFuel = 110.0f;
         snapshot.connected = false;
         return snapshot;
     }
+
     HANDLE physicsMapping_ = nullptr;
     HANDLE graphicsMapping_ = nullptr;
+    HANDLE staticMapping_ = nullptr;
 
-    PhysicsView* physicsView_ = nullptr;
-    GraphicsView* graphicsView_ = nullptr;
+    SPageFilePhysics* physicsView_ = nullptr;
+    SPageFileGraphic* graphicsView_ = nullptr;
+    SPageFileStatic* staticView_ = nullptr;
 
     bool connected_ = false;
     mutable std::chrono::steady_clock::time_point startTime_;
@@ -443,7 +878,8 @@ private:
     StrategyAdvice BuildStrategy(const TelemetrySnapshot& snapshot) const
     {
         StrategyAdvice advice;
-        advice.estimatedLapsRemaining = snapshot.fuel > 0.0f ? static_cast<int>(snapshot.fuel / 2.7f) : 0;
+        const float fuelPerLap = snapshot.fuelPerLap > 0.01f ? snapshot.fuelPerLap : 2.7f;
+        advice.estimatedLapsRemaining = snapshot.fuel > 0.0f ? static_cast<int>(snapshot.fuel / fuelPerLap) : 0;
 
         if (snapshot.fuel < 10.0f)
         {
@@ -546,21 +982,23 @@ public:
     void Broadcast(const std::string& message)
     {
         const std::string frame = BuildTextFrame(message);
-        std::lock_guard<std::mutex> lock(clientsMutex_);
-
-        auto it = clients_.begin();
-        while (it != clients_.end())
+        std::vector<SOCKET> clients;
         {
-            const int sent = send(*it, frame.data(), static_cast<int>(frame.size()), 0);
-            if (sent == SOCKET_ERROR)
+            std::lock_guard<std::mutex> lock(clientsMutex_);
+            clients = clients_;
+        }
+
+        for (SOCKET client : clients)
+        {
+            bool sent = false;
             {
-                shutdown(*it, SD_BOTH);
-                closesocket(*it);
-                it = clients_.erase(it);
+                std::lock_guard<std::mutex> sendLock(sendMutex_);
+                sent = SendAll(client, frame);
             }
-            else
+
+            if (!sent)
             {
-                ++it;
+                RemoveClient(client);
             }
         }
     }
@@ -584,8 +1022,12 @@ private:
 
             if (HandleClient(clientSocket))
             {
-                std::lock_guard<std::mutex> lock(clientsMutex_);
-                clients_.push_back(clientSocket);
+                {
+                    std::lock_guard<std::mutex> lock(clientsMutex_);
+                    clients_.push_back(clientSocket);
+                }
+
+                std::thread(&WebSocketServer::ReceiveLoop, this, clientSocket).detach();
             }
             else
             {
@@ -616,16 +1058,17 @@ private:
             }
         }
 
-        const std::string headerKey = "Sec-WebSocket-Key:";
-        const auto keyPosition = request.find(headerKey);
-        if (keyPosition == std::string::npos)
+        const std::string clientKey = FindHttpHeader(request, "Sec-WebSocket-Key");
+        if (clientKey.empty())
         {
             return false;
         }
 
-        const auto lineEnd = request.find("\r\n", keyPosition);
-        const auto keyValue = request.substr(keyPosition + headerKey.size(), lineEnd - (keyPosition + headerKey.size()));
-        const std::string acceptKey = ComputeAcceptKey(Trim(keyValue));
+        const std::string acceptKey = ComputeAcceptKey(clientKey);
+        if (acceptKey.empty())
+        {
+            return false;
+        }
 
         std::ostringstream response;
         response << "HTTP/1.1 101 Switching Protocols\r\n"
@@ -634,7 +1077,167 @@ private:
                  << "Sec-WebSocket-Accept: " << acceptKey << "\r\n\r\n";
 
         const std::string responseText = response.str();
-        return send(clientSocket, responseText.data(), static_cast<int>(responseText.size()), 0) != SOCKET_ERROR;
+        return SendAll(clientSocket, responseText);
+    }
+
+    struct ClientFrame
+    {
+        std::uint8_t opcode = 0;
+        std::string payload;
+    };
+
+    void ReceiveLoop(SOCKET clientSocket)
+    {
+        while (running_)
+        {
+            ClientFrame frame;
+            if (!ReadClientFrame(clientSocket, frame))
+            {
+                break;
+            }
+
+            if (frame.opcode == 0x8)
+            {
+                SendControlFrame(clientSocket, 0x8, frame.payload);
+                break;
+            }
+
+            if (frame.opcode == 0x9)
+            {
+                if (!SendControlFrame(clientSocket, 0xA, frame.payload))
+                {
+                    break;
+                }
+                continue;
+            }
+
+            if (frame.opcode == 0xA)
+            {
+                continue;
+            }
+        }
+
+        RemoveClient(clientSocket);
+    }
+
+    static bool ReceiveExact(SOCKET clientSocket, char* destination, std::size_t size)
+    {
+        std::size_t receivedTotal = 0;
+        while (receivedTotal < size)
+        {
+            const int received = recv(
+                clientSocket,
+                destination + receivedTotal,
+                static_cast<int>(size - receivedTotal),
+                0);
+            if (received <= 0)
+            {
+                return false;
+            }
+
+            receivedTotal += static_cast<std::size_t>(received);
+        }
+
+        return true;
+    }
+
+    static bool ReadClientFrame(SOCKET clientSocket, ClientFrame& frame)
+    {
+        std::array<unsigned char, 2> header{};
+        if (!ReceiveExact(clientSocket, reinterpret_cast<char*>(header.data()), header.size()))
+        {
+            return false;
+        }
+
+        frame.opcode = static_cast<std::uint8_t>(header[0] & 0x0F);
+        std::uint64_t payloadLength = header[1] & 0x7F;
+
+        if (payloadLength == 126)
+        {
+            std::array<unsigned char, 2> extended{};
+            if (!ReceiveExact(clientSocket, reinterpret_cast<char*>(extended.data()), extended.size()))
+            {
+                return false;
+            }
+            payloadLength = (static_cast<std::uint64_t>(extended[0]) << 8) |
+                            static_cast<std::uint64_t>(extended[1]);
+        }
+        else if (payloadLength == 127)
+        {
+            std::array<unsigned char, 8> extended{};
+            if (!ReceiveExact(clientSocket, reinterpret_cast<char*>(extended.data()), extended.size()))
+            {
+                return false;
+            }
+
+            payloadLength = 0;
+            for (unsigned char byte : extended)
+            {
+                payloadLength = (payloadLength << 8) | static_cast<std::uint64_t>(byte);
+            }
+        }
+
+        if (payloadLength > 65536)
+        {
+            return false;
+        }
+
+        std::array<unsigned char, 4> mask{};
+        const bool isMasked = (header[1] & 0x80) != 0;
+        if (isMasked && !ReceiveExact(clientSocket, reinterpret_cast<char*>(mask.data()), mask.size()))
+        {
+            return false;
+        }
+
+        frame.payload.assign(static_cast<std::size_t>(payloadLength), '\0');
+        if (payloadLength > 0 &&
+            !ReceiveExact(clientSocket, frame.payload.data(), static_cast<std::size_t>(payloadLength)))
+        {
+            return false;
+        }
+
+        if (isMasked)
+        {
+            for (std::size_t index = 0; index < frame.payload.size(); ++index)
+            {
+                frame.payload[index] = static_cast<char>(
+                    static_cast<unsigned char>(frame.payload[index]) ^ mask[index % mask.size()]);
+            }
+        }
+
+        return true;
+    }
+
+    bool SendControlFrame(SOCKET clientSocket, std::uint8_t opcode, std::string_view payload)
+    {
+        if (payload.size() > 125)
+        {
+            return false;
+        }
+
+        const std::string frame = BuildFrame(opcode, payload);
+        std::lock_guard<std::mutex> sendLock(sendMutex_);
+        return SendAll(clientSocket, frame);
+    }
+
+    void RemoveClient(SOCKET clientSocket)
+    {
+        bool shouldClose = false;
+        {
+            std::lock_guard<std::mutex> lock(clientsMutex_);
+            const auto it = std::find(clients_.begin(), clients_.end(), clientSocket);
+            if (it != clients_.end())
+            {
+                clients_.erase(it);
+                shouldClose = true;
+            }
+        }
+
+        if (shouldClose)
+        {
+            shutdown(clientSocket, SD_BOTH);
+            closesocket(clientSocket);
+        }
     }
 
     static std::string ComputeAcceptKey(const std::string& clientKey)
@@ -674,11 +1277,32 @@ private:
         return result;
     }
 
-    static std::string BuildTextFrame(const std::string& message)
+    static bool SendAll(SOCKET clientSocket, std::string_view message)
+    {
+        std::size_t sentTotal = 0;
+        while (sentTotal < message.size())
+        {
+            const int sent = send(
+                clientSocket,
+                message.data() + sentTotal,
+                static_cast<int>(message.size() - sentTotal),
+                0);
+            if (sent == SOCKET_ERROR || sent == 0)
+            {
+                return false;
+            }
+
+            sentTotal += static_cast<std::size_t>(sent);
+        }
+
+        return true;
+    }
+
+    static std::string BuildFrame(std::uint8_t opcode, std::string_view message)
     {
         std::string frame;
         frame.reserve(message.size() + 10);
-        frame.push_back(static_cast<char>(0x81));
+        frame.push_back(static_cast<char>(0x80 | opcode));
 
         const std::size_t size = message.size();
         if (size <= 125)
@@ -704,10 +1328,16 @@ private:
         return frame;
     }
 
+    static std::string BuildTextFrame(const std::string& message)
+    {
+        return BuildFrame(0x1, message);
+    }
+
     std::atomic<bool> running_{false};
     SOCKET listenSocket_ = INVALID_SOCKET;
     std::thread acceptThread_;
     std::mutex clientsMutex_;
+    std::mutex sendMutex_;
     std::vector<SOCKET> clients_;
 };
 
