@@ -1,4 +1,4 @@
-﻿// acc app.cpp : このファイルには 'main' 関数が含まれています。プログラム実行の開始と終了がそこで行われます。
+// acc app.cpp : このファイルには 'main' 関数が含まれています。プログラム実行の開始と終了がそこで行われます。
 //
 
 #define WIN32_LEAN_AND_MEAN
@@ -94,9 +94,9 @@ constexpr unsigned short htons(unsigned short value)
 constexpr std::uint32_t htonl(std::uint32_t value)
 {
     return ((value & 0x000000FFu) << 24) |
-           ((value & 0x0000FF00u) << 8) |
-           ((value & 0x00FF0000u) >> 8) |
-           ((value & 0xFF000000u) >> 24);
+        ((value & 0x0000FF00u) << 8) |
+        ((value & 0x00FF0000u) >> 8) |
+        ((value & 0xFF000000u) >> 24);
 }
 
 extern "C"
@@ -118,9 +118,6 @@ extern "C"
     __declspec(dllimport) int __stdcall closesocket(SOCKET);
     __declspec(dllimport) int __stdcall setsockopt(SOCKET, int, int, const char*, int);
 
-    constexpr int SOL_SOCKET = 0xFFFF;
-    constexpr int SO_REUSEADDR = 0x0004;
-
     __declspec(dllimport) BOOL __stdcall CryptAcquireContextW(HCRYPTPROV*, LPCWSTR, LPCWSTR, DWORD, DWORD);
     __declspec(dllimport) BOOL __stdcall CryptCreateHash(HCRYPTPROV, DWORD, std::uintptr_t, DWORD, HCRYPTHASH*);
     __declspec(dllimport) BOOL __stdcall CryptHashData(HCRYPTHASH, const BYTE*, DWORD, DWORD);
@@ -129,6 +126,10 @@ extern "C"
     __declspec(dllimport) BOOL __stdcall CryptReleaseContext(HCRYPTPROV, DWORD);
     __declspec(dllimport) BOOL __stdcall CryptBinaryToStringA(const BYTE*, DWORD, DWORD, char*, DWORD*);
 }
+
+// extern "C" (Cリンケージ)とconstexprは相性が悪くMSVCでエラーになるため、ブロックの外側で定義する
+constexpr int SOL_SOCKET = 0xFFFF;
+constexpr int SO_REUSEADDR = 0x0004;
 
 #pragma comment(lib, "Ws2_32.lib")
 #pragma comment(lib, "Crypt32.lib")
@@ -256,7 +257,7 @@ namespace
     }
 
     template <std::size_t Size>
-    std::string NarrowWideText(const wchar_t (&value)[Size])
+    std::string NarrowWideText(const wchar_t(&value)[Size])
     {
         std::string result;
         result.reserve(Size);
@@ -326,6 +327,7 @@ struct TelemetrySnapshot
     int sessionType = 0;          // AC_SESSION_TYPE (-1=Unknown,0=Practice,1=Qualify,2=Race,...)
     float sessionTimeLeft = 0.0f; // 秒
     int numberOfLaps = 0;         // 周回数ベースのセッションでの総周回数(時間ベースなら0)
+    int missingMandatoryPits = 0; // 残り義務ピット数(未実施分)
 
     bool connected = false;
 
@@ -377,6 +379,7 @@ struct TelemetrySnapshot
         oss << "\"sessionType\":" << sessionType << ",";
         oss << "\"sessionTimeLeft\":" << CleanFloat(sessionTimeLeft) << ",";
         oss << "\"numberOfLaps\":" << numberOfLaps << ",";
+        oss << "\"missingMandatoryPits\":" << missingMandatoryPits << ",";
 
         oss << "\"connected\":" << (connected ? "true" : "false");
 
@@ -487,6 +490,7 @@ public:
             snapshot.sessionType = graphicsView_->session;
             snapshot.sessionTimeLeft = CleanFloat(graphicsView_->sessionTimeLeft);
             snapshot.numberOfLaps = graphicsView_->numberOfLaps;
+            snapshot.missingMandatoryPits = graphicsView_->missingMandatoryPits;
 
             snapshot.fuelPerLap = CleanFloat(graphicsView_->fuelXLap);
             if (snapshot.fuelPerLap <= 0.01f && graphicsView_->fuelEstimatedLaps > 0.01f && snapshot.fuel > 0.01f)
@@ -899,6 +903,7 @@ private:
         snapshot.sessionType = 2; // Race
         snapshot.sessionTimeLeft = 3600.0f;
         snapshot.numberOfLaps = 0;
+        snapshot.missingMandatoryPits = 1;
         snapshot.connected = false;
         return snapshot;
     }
@@ -1128,9 +1133,9 @@ private:
 
         std::ostringstream response;
         response << "HTTP/1.1 101 Switching Protocols\r\n"
-                 << "Upgrade: websocket\r\n"
-                 << "Connection: Upgrade\r\n"
-                 << "Sec-WebSocket-Accept: " << acceptKey << "\r\n\r\n";
+            << "Upgrade: websocket\r\n"
+            << "Connection: Upgrade\r\n"
+            << "Sec-WebSocket-Accept: " << acceptKey << "\r\n\r\n";
 
         const std::string responseText = response.str();
         return SendAll(clientSocket, responseText);
@@ -1216,7 +1221,7 @@ private:
                 return false;
             }
             payloadLength = (static_cast<std::uint64_t>(extended[0]) << 8) |
-                            static_cast<std::uint64_t>(extended[1]);
+                static_cast<std::uint64_t>(extended[1]);
         }
         else if (payloadLength == 127)
         {
@@ -1389,7 +1394,7 @@ private:
         return BuildFrame(0x1, message);
     }
 
-    std::atomic<bool> running_{false};
+    std::atomic<bool> running_{ false };
     SOCKET listenSocket_ = INVALID_SOCKET;
     std::thread acceptThread_;
     std::mutex clientsMutex_;
